@@ -2,7 +2,7 @@
 
 const _ = require('lodash');
 const fs = require('fs-extra');
-const webdriverio = require('@gemini-testing/webdriverio');
+const webdriverio = require('webdriverio');
 const {Image, temp, ScreenShooter} = require('gemini-core');
 const ImageDiffError = require('lib/browser/commands/assert-view/errors/image-diff-error');
 const NoRefImageError = require('lib/browser/commands/assert-view/errors/no-ref-image-error');

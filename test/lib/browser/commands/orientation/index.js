@@ -1,6 +1,6 @@
 'use strict';
 
-const webdriverio = require('@gemini-testing/webdriverio');
+const webdriverio = require('webdriverio');
 const {mkExistingBrowser_: mkBrowser_, mkSessionStub_} = require('../../utils');
 
 describe('orientation command', () => {
