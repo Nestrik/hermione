@@ -14,7 +14,7 @@ const Runner = require('lib/runner');
 const BrowserRunner = require('lib/runner/browser-runner');
 const TestCollection = require('lib/test-collection');
 
-const {makeConfigStub, makeTest} = require('../../utils');
+const {makeConfigStub} = require('../../utils');
 
 describe('Runner', () => {
     const sandbox = sinon.sandbox.create();
@@ -97,14 +97,14 @@ describe('Runner', () => {
                 assert.calledOnceWith(Workers.create, config);
             });
 
-            it('should create workers before RUNNER_START event', async () => {
-                const onRunnerStart = sinon.stub().named('onRunnerStart').resolves();
+            it('should create workers before BEGIN event', async () => {
+                const onBegin = sinon.stub().named('onBegin').resolves();
                 const runner = new Runner(makeConfigStub())
-                    .on(RunnerEvents.RUNNER_START, onRunnerStart);
+                    .on(RunnerEvents.BEGIN, onBegin);
 
                 await run_({runner});
 
-                assert.callOrder(Workers.create, onRunnerStart);
+                assert.callOrder(Workers.create, onBegin);
             });
 
             it('should pass workers to each browser runner', async () => {
@@ -131,53 +131,6 @@ describe('Runner', () => {
 
                 assert.calledOnce(Workers.prototype.end);
             });
-        });
-
-        describe('RUNNER_START event', () => {
-            it('should pass a runner to a RUNNER_START handler', async () => {
-                const onRunnerStart = sinon.stub().named('onRunnerStart').resolves();
-                const runner = new Runner(makeConfigStub())
-                    .on(RunnerEvents.RUNNER_START, onRunnerStart);
-
-                await run_({runner});
-
-                assert.calledOnceWith(onRunnerStart, runner);
-            });
-
-            it('should start browser runner only after RUNNER_START handler finish', async () => {
-                const mediator = sinon.spy().named('mediator');
-                const onRunnerStart = sinon.stub().named('onRunnerStart').callsFake(() => Promise.delay(10).then(mediator));
-                const runner = new Runner(makeConfigStub())
-                    .on(RunnerEvents.RUNNER_START, onRunnerStart);
-
-                await run_({runner});
-
-                assert.callOrder(mediator, BrowserRunner.prototype.run);
-            });
-
-            it('should not run any browser runner if RUNNER_START handler failed', async () => {
-                const onRunnerStart = sinon.stub().named('onRunnerStart').rejects('some-error');
-                const runner = new Runner(makeConfigStub())
-                    .on(RunnerEvents.RUNNER_START, onRunnerStart);
-
-                await run_({runner}).catch(() => {});
-
-                assert.notCalled(BrowserRunner.prototype.run);
-            });
-        });
-
-        it('should emit BEGIN event only after RUNNER_START handler finish', async () => {
-            const mediator = sinon.spy().named('mediator');
-            const onRunnerStart = sinon.stub().named('onRunnerStart').callsFake(() => Promise.delay(10).then(mediator));
-            const onBegin = sinon.stub().named('onBegin');
-
-            const runner = new Runner(makeConfigStub())
-                .on(RunnerEvents.RUNNER_START, onRunnerStart)
-                .on(RunnerEvents.BEGIN, onBegin);
-
-            await run_({runner});
-
-            assert.callOrder(onRunnerStart, mediator, onBegin);
         });
 
         it('should create browser runners for all browsers from config', async () => {
@@ -218,26 +171,6 @@ describe('Runner', () => {
             await run_({testCollection});
 
             assert.calledOnceWith(BrowserRunner.prototype.run, testCollection);
-        });
-
-        it('should aggregate statistic for all browsers', async () => {
-            const emitTestResult = (title) => function() {
-                this.emit(RunnerEvents.TEST_PASS, makeTest({title}));
-                return Promise.resolve();
-            };
-
-            TestCollection.prototype.getBrowsers.returns(['foo', 'bar']);
-            BrowserRunner.prototype.run
-                .onFirstCall().callsFake(emitTestResult('test1'))
-                .onSecondCall().callsFake(emitTestResult('test2'));
-
-            const onRunnerEnd = sinon.stub().named('onRunnerEnd');
-            const runner = new Runner(makeConfigStub())
-                .on(RunnerEvents.RUNNER_END, onRunnerEnd);
-
-            await run_({runner});
-
-            assert.equal(onRunnerEnd.firstCall.args[0].total, 2);
         });
 
         it('should wait until all browser runners will finish', async () => {
@@ -443,108 +376,13 @@ describe('Runner', () => {
             it('should be emitted even if some browser runner failed', async () => {
                 const onEnd = sinon.spy().named('onEnd');
                 const runner = new Runner(makeConfigStub())
-                    .on(RunnerEvents.RUNNER_END, onEnd);
+                    .on(RunnerEvents.END, onEnd);
 
                 BrowserRunner.prototype.run.callsFake(() => Promise.reject());
 
                 await run_({runner}).catch(() => {});
 
                 assert.calledOnce(onEnd);
-            });
-
-            it('should pass test statistic to an END handler', async () => {
-                sandbox.stub(RunnerStats.prototype, 'getResult').returns({foo: 'bar'});
-
-                const onEnd = sinon.stub().named('onEnd');
-                const runner = new Runner(makeConfigStub())
-                    .on(RunnerEvents.END, onEnd);
-
-                await run_({runner});
-
-                assert.calledOnceWith(onEnd, {foo: 'bar'});
-            });
-
-            it('should be emitted before RUNNER_END event', async () => {
-                const onEnd = sinon.spy().named('onEnd');
-                const onRunnerEnd = sinon.spy().named('onRunnerEnd');
-
-                const runner = new Runner(makeConfigStub())
-                    .on(RunnerEvents.END, onEnd)
-                    .on(RunnerEvents.RUNNER_END, onRunnerEnd);
-
-                await run_({runner});
-
-                assert.callOrder(onEnd, onRunnerEnd);
-            });
-        });
-
-        describe('RUNNER_END event', () => {
-            it('should be emitted after browser runners finish', async () => {
-                const onRunnerEnd = sinon.spy().named('onRunnerEnd');
-
-                const runner = new Runner(makeConfigStub())
-                    .on(RunnerEvents.RUNNER_END, onRunnerEnd);
-
-                await run_({runner});
-
-                assert.callOrder(BrowserRunner.prototype.run, onRunnerEnd);
-            });
-
-            it('runner should wait until RUNNER_END handler finished', async () => {
-                const finMarker = sinon.spy().named('finMarker');
-                const onRunnerEnd = sinon.stub().named('onRunnerEnd').callsFake(() => Promise.delay(1).then(finMarker));
-
-                const runner = new Runner(makeConfigStub())
-                    .on(RunnerEvents.RUNNER_END, onRunnerEnd);
-
-                await run_({runner});
-
-                assert.calledOnce(finMarker);
-            });
-
-            it('should be emitted even if RUNNER_START handler failed', async () => {
-                const onRunnerStart = sinon.stub().named('onRunnerStart').rejects();
-                const onRunnerEnd = sinon.spy().named('onRunnerEnd');
-                const runner = new Runner(makeConfigStub())
-                    .on(RunnerEvents.RUNNER_START, onRunnerStart)
-                    .on(RunnerEvents.RUNNER_END, onRunnerEnd);
-
-                await run_({runner}).catch(() => {});
-
-                assert.calledOnce(onRunnerEnd);
-            });
-
-            it('should be emitted even if some browser runner failed', async () => {
-                const onRunnerEnd = sinon.spy().named('onRunnerEnd');
-                const runner = new Runner(makeConfigStub())
-                    .on(RunnerEvents.RUNNER_END, onRunnerEnd);
-
-                BrowserRunner.prototype.run.callsFake(() => Promise.reject());
-
-                await run_({runner}).catch(() => {});
-
-                assert.calledOnce(onRunnerEnd);
-            });
-
-            it('should pass test statistic to a RUNNER_END handler', async () => {
-                sandbox.stub(RunnerStats.prototype, 'getResult').returns({foo: 'bar'});
-
-                const onRunnerEnd = sinon.stub().named('onRunnerEnd');
-                const runner = new Runner(makeConfigStub())
-                    .on(RunnerEvents.RUNNER_END, onRunnerEnd);
-
-                await run_({runner});
-
-                assert.calledOnceWith(onRunnerEnd, {foo: 'bar'});
-            });
-
-            it('should fail with original error if RUNNER_END handler is failed too', () => {
-                const runner = new Runner(makeConfigStub())
-                    .on(RunnerEvents.RUNNER_END, () => Promise.reject('handler-error'));
-
-                BrowserRunner.prototype.run.callsFake(() => Promise.reject('run-error'));
-
-                return assert.isRejected(run_({runner}), /run-error/);
             });
         });
     });
@@ -666,7 +504,7 @@ describe('Runner', () => {
             TestCollection.prototype.getBrowsers.returns(['foo', 'bar']);
 
             const runner = new Runner(makeConfigStub())
-                .on(RunnerEvents.RUNNER_START, () => runner.cancel());
+                .on(RunnerEvents.BEGIN, () => runner.cancel());
 
             await run_({runner});
 

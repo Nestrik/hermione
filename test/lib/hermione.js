@@ -13,6 +13,7 @@ const Config = require('lib/config');
 const RuntimeConfig = require('lib/config/runtime-config');
 const Errors = require('lib/errors');
 const Hermione = require('lib/hermione');
+const RunnerStats = require('lib/stats');
 const TestReader = require('lib/test-reader');
 const TestCollection = require('lib/test-collection');
 const RunnerEvents = require('lib/constants/runner-events');
@@ -34,6 +35,8 @@ describe('hermione', () => {
         return runner;
     };
 
+    let runnerStats;
+
     beforeEach(() => {
         sandbox.stub(logger, 'warn');
         sandbox.stub(Config, 'create').returns(makeConfigStub());
@@ -43,6 +46,9 @@ describe('hermione', () => {
         sandbox.stub(RuntimeConfig, 'getInstance').returns({extend: sandbox.stub()});
 
         sandbox.stub(TestReader.prototype, 'read').resolves();
+
+        runnerStats = sandbox.createStubInstance(RunnerStats);
+        sandbox.stub(RunnerStats, 'create').returns(runnerStats);
     });
 
     afterEach(() => sandbox.restore());
@@ -205,7 +211,6 @@ describe('hermione', () => {
         describe('reporters', () => {
             let Hermione;
             let attachRunner;
-            let runner;
 
             const createReporter = () => {
                 return function Reporter() {
@@ -218,24 +223,25 @@ describe('hermione', () => {
                     './reporters/reporter': createReporter()
                 });
 
-                runner = mkRunnerStub_();
                 attachRunner = sandbox.stub();
             });
 
             it('should accept reporter specified as string', () => {
                 const options = {reporters: ['reporter']};
+                const hermione = Hermione.create();
 
-                return Hermione.create()
+                return hermione
                     .run(null, options)
-                    .then(() => assert.calledOnceWith(attachRunner, runner));
+                    .then(() => assert.calledOnceWith(attachRunner, hermione));
             });
 
             it('should accept reporter specified as function', () => {
                 const options = {reporters: [createReporter()]};
+                const hermione = Hermione.create();
 
-                return Hermione.create()
+                return hermione
                     .run(null, options)
-                    .then(() => assert.calledOnceWith(attachRunner, runner));
+                    .then(() => assert.calledOnceWith(attachRunner, hermione));
             });
 
             it('should fail if reporter was not found for given identifier', () => {
@@ -329,6 +335,108 @@ describe('hermione', () => {
 
                 return hermione.run()
                     .then(() => assert.calledOnceWith(hermione.halt, err));
+            });
+        });
+
+        describe('RUNNER_START event', () => {
+            it('should pass a runner to a RUNNER_START handler', async () => {
+                const onRunnerStart = sinon.spy().named('onRunnerStart');
+                const runner = mkRunnerStub_();
+
+                await Hermione.create().on(RunnerEvents.RUNNER_START, onRunnerStart).run();
+
+                assert.calledOnceWith(onRunnerStart, runner);
+            });
+
+            it('should run tests only after RUNNER_START handler finish', async () => {
+                const mediator = sinon.spy().named('mediator');
+                const onRunnerStart = sinon.stub().named('onRunnerStart').callsFake(() => Promise.delay(10).then(mediator));
+                const runner = mkRunnerStub_();
+
+                await Hermione.create().on(RunnerEvents.RUNNER_START, onRunnerStart).run();
+
+                assert.callOrder(mediator, runner.run);
+            });
+
+            it('should not run tests if RUNNER_START handler failed', async () => {
+                const onRunnerStart = sinon.stub().named('onRunnerStart').rejects('some-error');
+                const runner = mkRunnerStub_();
+
+                try {
+                    await Hermione.create().on(RunnerEvents.RUNNER_START, onRunnerStart).run();
+                } catch (e) {
+                    assert.notCalled(runner.run);
+                }
+            });
+        });
+
+        describe('RUNNER_END', () => {
+            it('should be emitted after test run', async () => {
+                const onRunnerEnd = sinon.spy().named('onRunnerEnd');
+                const runner = mkRunnerStub_();
+
+                await Hermione.create().on(RunnerEvents.RUNNER_END, onRunnerEnd).run();
+
+                assert.callOrder(runner.run, onRunnerEnd);
+            });
+
+            it('should wait until all handlers finished', async () => {
+                const finMarker = sinon.spy().named('finMarker');
+                const onRunnerEnd = sinon.stub().named('onRunnerEnd').callsFake(() => Promise.delay(1).then(finMarker));
+
+                await Hermione.create().on(RunnerEvents.RUNNER_END, onRunnerEnd).run();
+
+                assert.calledOnce(finMarker);
+            });
+
+            it('should be emitted even if RUNNER_START handler failed', async () => {
+                const onRunnerStart = sinon.stub().named('onRunnerStart').rejects();
+                const onRunnerEnd = sinon.spy().named('onRunnerEnd');
+
+                try {
+                    await Hermione.create()
+                        .on(RunnerEvents.RUNNER_START, onRunnerStart)
+                        .on(RunnerEvents.RUNNER_END, onRunnerEnd)
+                        .run();
+                } catch (e) {
+                    assert.calledOnce(onRunnerEnd);
+                }
+            });
+
+            it('should be emitted even if test run failed', async () => {
+                const onRunnerEnd = sinon.spy().named('onRunnerEnd');
+                const runner = mkRunnerStub_();
+
+                runner.run.rejects('some-error');
+
+                try {
+                    await Hermione.create().on(RunnerEvents.RUNNER_END, onRunnerEnd).run();
+                } catch (e) {
+                    assert.calledOnce(onRunnerEnd);
+                }
+            });
+
+            it('should pass test statistic to a RUNNER_END handler', async () => {
+                runnerStats.getResult.returns({foo: 'bar'});
+                const onRunnerEnd = sinon.stub().named('onRunnerEnd');
+
+                await Hermione.create().on(RunnerEvents.RUNNER_END, onRunnerEnd).run();
+
+                assert.calledOnceWith(onRunnerEnd, {foo: 'bar'});
+            });
+
+            it('should fail with original error if RUNNER_END handler is failed too', async () => {
+                const handlerError = new Error('handler-error');
+                const runError = new Error('run-error');
+                const runner = mkRunnerStub_();
+
+                runner.run.rejects(runError);
+
+                try {
+                    await Hermione.create().on(RunnerEvents.RUNNER_END, () => Promise.reject(handlerError)).run();
+                } catch (e) {
+                    assert.deepEqual(e, runError);
+                }
             });
         });
 
@@ -706,7 +814,7 @@ describe('hermione', () => {
 
             sandbox.stub(logger, 'error');
             sandbox.stub(process, 'exit');
-            sandbox.stub(Runner.prototype, 'run').callsFake(() => hermione.emitAndWait(RunnerEvents.RUNNER_START));
+            sandbox.stub(Runner.prototype, 'run');
             sandbox.stub(Runner.prototype, 'cancel');
         });
 
